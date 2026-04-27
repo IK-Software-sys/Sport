@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CYBER-FIT: P2P Coaching</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --cyan: #00f3ff;
+            --lime: #39ff14;
+            --panel: rgba(0, 243, 255, 0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Orbitron', sans-serif; }
+        
+        body {
+            background-color: var(--bg);
+            color: white;
+            overflow: hidden;
+            touch-action: none; /* Prevents pull-to-refresh on mobile */
+        }
+
+        /* Mobile Exclusive Lock */
+        @media (min-width: 768px) {
+            body::before {
+                content: 'MOBILE EXCLUSIVE EXPERIENCE. PLEASE OPEN ON A SMARTPHONE.';
+                position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+                background: var(--bg); color: var(--cyan);
+                display: flex; align-items: center; justify-content: center;
+                z-index: 9999; text-align: center; font-size: 2rem; padding: 20px;
+            }
+        }
+
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            padding: 20px; text-align: center;
+        }
+
+        .active { display: flex; }
+
+        h1 { color: var(--cyan); text-shadow: 0 0 10px var(--cyan); margin-bottom: 30px; font-size: 2.5rem; }
+        h2 { color: var(--lime); margin-bottom: 20px; }
+
+        input, select {
+            width: 100%; max-width: 300px; padding: 15px; margin: 10px 0;
+            background: var(--panel); border: 2px solid var(--cyan); color: white;
+            border-radius: 10px; font-size: 1.1rem; outline: none;
+        }
+
+        button {
+            width: 100%; max-width: 300px; padding: 15px; margin: 15px 0;
+            background: transparent; border: 2px solid var(--lime); color: var(--lime);
+            border-radius: 10px; font-size: 1.2rem; font-weight: bold;
+            text-transform: uppercase; cursor: pointer; transition: 0.3s;
+            box-shadow: 0 0 10px rgba(57, 255, 20, 0.3);
+        }
+
+        button:active { background: var(--lime); color: var(--bg); }
+
+        /* Game Screen UI */
+        #video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); /* Mirror camera */ }
+        canvas { z-index: 2; }
+
+        .hud {
+            position: absolute; z-index: 3; padding: 15px; background: rgba(0,0,0,0.6);
+            border: 1px solid var(--cyan); border-radius: 10px; backdrop-filter: blur(5px);
+        }
+
+        #stats-hud { top: 20px; left: 20px; text-align: left; }
+        #multiplayer-hud { top: 20px; right: 20px; text-align: right; border-color: var(--lime); display: none; }
+        
+        .hud-value { font-size: 2rem; color: var(--lime); font-weight: 900; }
+        .p2p-id-box { background: #000; padding: 10px; border: 1px dashed var(--cyan); word-break: break-all; margin-bottom: 15px;}
+    </style>
+</head>
+<body>
+
+    <audio id="bgm" src="song.mp3" loop></audio>
+    <audio id="sfx-rep" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3"></audio>
+
+    <div id="screen-onboarding" class="screen active">
+        <h1>CYBER-FIT</h1>
+        <p style="color: #aaa; margin-bottom: 20px;">CALIBRATE BIOMETRICS</p>
+        <select id="gender">
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+        </select>
+        <input type="number" id="age" placeholder="Age (e.g. 18)" min="10" max="99">
+        <input type="number" id="height" placeholder="Height (cm) (e.g. 175)" min="100" max="250">
+        <button onclick="saveProfile()">Initialize</button>
+    </div>
+
+    <div id="screen-lobby" class="screen">
+        <h2>NETWORK UPLINK</h2>
+        
+        <div style="width: 100%; max-width: 300px;">
+            <p>Your Player ID:</p>
+            <div class="p2p-id-box" id="my-id">Generating...</div>
+            <button onclick="startSolo()" style="border-color: var(--cyan); color: var(--cyan);">Start Solo Mode</button>
+            <hr style="border: 1px solid #333; margin: 20px 0;">
+            <p>Challenge a Player:</p>
+            <input type="text" id="opponent-id" placeholder="Paste Opponent ID here">
+            <button onclick="connectAndStartP2P()">Connect & Battle</button>
+        </div>
+    </div>
+
+    <div id="screen-game" class="screen">
+        <div id="video-container">
+            <video id="webcam" autoplay playsinline></video>
+            <canvas id="output_canvas"></canvas>
+        </div>
+        
+        <div id="stats-hud" class="hud">
+            <div>REPS: <span id="ui-reps" class="hud-value">0</span></div>
+            <div style="font-size: 0.8rem; margin-top: 5px; color: var(--cyan);">KCAL: <span id="ui-kcal">0.0</span></div>
+            <div style="font-size: 0.8rem; margin-top: 5px;" id="ui-status">Form: Calibrating</div>
+        </div>
+
+        <div id="multiplayer-hud" class="hud">
+            <div>ENEMY: <span id="ui-enemy-reps" class="hud-value" style="color: #ff0055;">0</span></div>
+            <div style="font-size: 0.8rem; margin-top: 5px; color: #ff0055;">Link Active</div>
+        </div>
+    </div>
+
+<script>
+    // --- APP STATE ---
+    let userProfile = { gender: 'male', age: 18, height: 175 };
+    let reps = 0;
+    let calories = 0.0;
+    let isDown = false; // For squat logic
+    
+    // --- P2P STATE ---
+    let peer = null;
+    let connection = null;
+    let isMultiplayer = false;
+
+    // --- DOM Elements ---
+    const screens = {
+        onboarding: document.getElementById('screen-onboarding'),
+        lobby: document.getElementById('screen-lobby'),
+        game: document.getElementById('screen-game')
+    };
+    
+    const ui = {
+        reps: document.getElementById('ui-reps'),
+        kcal: document.getElementById('ui-kcal'),
+        status: document.getElementById('ui-status'),
+        enemyReps: document.getElementById('ui-enemy-reps')
+    };
+
+    // --- 1. UI Flow & Profile ---
+    function switchScreen(screenKey) {
+        Object.values(screens).forEach(s => s.classList.remove('active'));
+        screens[screenKey].classList.add('active');
+    }
+
+    function saveProfile() {
+        const age = document.getElementById('age').value;
+        const height = document.getElementById('height').value;
+        if(!age || !height) return alert("Please enter biometrics to proceed.");
+        
+        userProfile.gender = document.getElementById('gender').value;
+        userProfile.age = parseInt(age);
+        userProfile.height = parseInt(height);
+        
+        // Start background music context (browsers require user interaction first)
+        document.getElementById('bgm').play().catch(e => console.log("BGM autoplay prevented"));
+        
+        initPeerJS();
+        switchScreen('lobby');
+    }
+
+    // --- 2. PeerJS (P2P Networking) ---
+    function initPeerJS() {
+        // Initialize with public free PeerServer
+        peer = new Peer(null, { debug: 2 }); 
+
+        peer.on('open', (id) => {
+            document.getElementById('my-id').innerText = id;
+        });
+
+        // Listen for incoming challenges
+        peer.on('connection', (conn) => {
+            connection = conn;
+            setupConnection();
+            alert("Incoming Challenge Uplink! Starting Game...");
+            startGame(true);
+        });
+    }
+
+    function connectAndStartP2P() {
+        const oppId = document.getElementById('opponent-id').value;
+        if(!oppId) return alert("Enter an Opponent ID!");
+        
+        connection = peer.connect(oppId);
+        setupConnection();
+        startGame(true);
+    }
+
+    function setupConnection() {
+        connection.on('open', () => {
+            console.log("P2P Link established!");
+        });
+        
+        // Receive opponent's rep data
+        connection.on('data', (data) => {
+            if(data.type === 'REP_UPDATE') {
+                ui.enemyReps.innerText = data.value;
+            }
+        });
+    }
+
+    function broadcastReps() {
+        if(connection && connection.open) {
+            connection.send({ type: 'REP_UPDATE', value: reps });
+        }
+    }
+
+    // --- 3. Game Initialization ---
+    function startSolo() { startGame(false); }
+
+    function startGame(multi) {
+        isMultiplayer = multi;
+        if(isMultiplayer) document.getElementById('multiplayer-hud').style.display = 'block';
+        switchScreen('game');
+        initMediaPipe();
+    }
+
+    // --- 4. MediaPipe AI & Tracking Logic ---
+    function initMediaPipe() {
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        // Setup MediaPipe Pose
+        const pose = new Pose({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+        }});
+
+        pose.setOptions({
+            modelComplexity: 0, // 0 is fastest, best for mobile browsers
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults((results) => {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.poseLandmarks) {
+                // Draw skeleton (cyan color for tech theme)
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
+                            {color: '#00f3ff', lineWidth: 4});
+                drawLandmarks(canvasCtx, results.poseLandmarks,
+                            {color: '#39ff14', lineWidth: 2});
+                
+                analyzeForm(results.poseLandmarks);
+            }
+            canvasCtx.restore();
+        });
+
+        // Pipe Front-facing camera to MediaPipe
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({image: videoElement});
+            },
+            width: 640,
+            height: 480,
+            facingMode: 'user' // Front camera
+        });
+        camera.start();
+    }
+
+    // --- 5. Biomechanics (Math) ---
+    // Calculate angle between 3 points (A, B, C) with B as the vertex
+    function calculateAngle(a, b, c) {
+        let radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+        let angle = Math.abs(radians * 180.0 / Math.PI);
+        if (angle > 180.0) angle = 360 - angle;
+        return angle;
+    }
+
+    function analyzeForm(landmarks) {
+        // Example logic for SQUATS
+        // Landmarks: 23/24 = Hip, 25/26 = Knee, 27/28 = Ankle
+        const hip = landmarks[23]; // Left Hip
+        const knee = landmarks[25]; // Left Knee
+        const ankle = landmarks[27]; // Left Ankle
+
+        // Ensure landmarks are visible
+        if(hip.visibility > 0.5 && knee.visibility > 0.5 && ankle.visibility > 0.5) {
+            let angle = calculateAngle(hip, knee, ankle);
+
+            // Squat Logic
+            if (angle < 90) {
+                if(!isDown) ui.status.innerText = "Form: HOLD...";
+                isDown = true;
+            } else if (angle > 160 && isDown) {
+                isDown = false;
+                registerRep();
+                ui.status.innerText = "Form: GOOD";
+            }
+        } else {
+            ui.status.innerText = "Form: Step Back";
+        }
+    }
+
+    function registerRep() {
+        reps++;
+        ui.reps.innerText = reps;
+        
+        // Play SFX
+        const sfx = document.getElementById('sfx-rep');
+        sfx.currentTime = 0;
+        sfx.play();
+
+        // Calculate rough calories based on height and age profile setup
+        let calMultiplier = (userProfile.height / 100) * (userProfile.age / 20) * 0.15;
+        calories += calMultiplier;
+        ui.kcal.innerText = calories.toFixed(1);
+
+        // Sync with opponent
+        if(isMultiplayer) broadcastReps();
+    }
+</script>
+</body>
+</html>
